@@ -2,201 +2,252 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>スラスラクイズ（高速・最適化版）</title>
+<title>RE-Q | Smart Interval Learning</title>
 <style>
-    body { font-family: 'Helvetica Neue', Arial, sans-serif; padding: 30px; max-width: 600px; margin: auto; background-color: #f4f7f6; }
-    h2 { color: #2c3e50; text-align: center; }
-    #quizArea { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-    #question { font-size: 24px; font-weight: bold; margin-bottom: 15px; min-height: 40px; color: #34495e; }
-    #answer { font-size: 20px; padding: 10px; width: calc(100% - 22px); border: 2px solid #ddd; border-radius: 5px; outline: none; }
-    #answer:focus { border-color: #3498db; }
-    #answer.showing-answer { color: #7f8c8d; cursor: not-allowed; background-color: #fafafa; border-color: #ddd; }
-    #score { margin-top: 15px; font-size: 14px; color: #7f8c8d; display: flex; justify-content: space-between; }
-    #report { margin-top: 20px; padding: 15px; background: #fff; border-left: 5px solid #3498db; line-height: 1.6; }
+    :root { --primary: #3498db; --bg: #f4f7f6; --text: #2c3e50; }
+    body { font-family: 'Helvetica Neue', Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto; background-color: var(--bg); color: var(--text); }
+    h2 { text-align: center; letter-spacing: 4px; color: var(--primary); margin-bottom: 20px; font-weight: 900; }
+    #setupArea { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+    #dropZone { border: 2px dashed #ccc; padding: 30px; text-align: center; border-radius: 10px; background: #fafafa; transition: 0.3s; cursor: pointer; color: #7f8c8d; }
+    #dropZone.dragover { border-color: var(--primary); background: #eef7fe; color: var(--primary); }
+    #pasteArea { width: 100%; height: 100px; margin-top: 15px; border-radius: 8px; border: 1px solid #ddd; padding: 12px; box-sizing: border-box; font-size: 14px; resize: none; outline: none; }
+    .start-btn { width: 100%; padding: 12px; background: var(--primary); color: white; border: none; border-radius: 8px; margin-top: 15px; cursor: pointer; font-weight: bold; font-size: 16px; transition: 0.2s; }
+    
+    #quizArea { background: white; padding: 30px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); }
+    #question { font-size: 28px; font-weight: bold; margin-bottom: 20px; min-height: 45px; }
+    
+    /* ズレ防止：box-sizingをborder-boxにし、高さを厳密に固定 */
+    #answer { 
+        font-size: 22px; 
+        padding: 15px; 
+        width: 100%; 
+        border: 2px solid #eee; 
+        border-radius: 10px; 
+        outline: none; 
+        box-sizing: border-box; 
+        height: 60px; 
+        display: block;
+    }
+    #answer:focus { border-color: var(--primary); }
+    #answer.showing-answer { color: #e74c3c; background-color: #fdf2f2; border-color: #fab1a0; font-weight: bold; cursor: default; }
+    
+    #score { margin-top: 25px; font-size: 14px; color: #95a5a6; display: flex; justify-content: space-between; border-top: 1px solid #f0f0f0; padding-top: 20px; }
+    #score b { color: var(--text); }
     .hidden { display: none; }
+    #report { margin-top: 20px; padding: 15px; border-radius: 10px; background: #e8f4fd; color: #2980b9; font-weight: bold; text-align: center; }
 </style>
 </head>
 <body>
 
-<h2>スラスラクイズ</h2>
-<div style="text-align: center; margin-bottom: 20px;">
-    <input type="file" id="fileInput" accept=".csv,.txt">
+<h2>RE-Q</h2>
+
+<div id="setupArea">
+    <div id="dropZone">
+        CSVファイルをドロップ、またはクリックして選択
+        <input type="file" id="fileInput" accept=".csv,.txt" class="hidden">
+    </div>
+    <textarea id="pasteArea" placeholder="ここに「答え,問題」の形式で貼り付け"></textarea>
+    <div style="margin: 15px 0; text-align: center;">
+        <label style="cursor: pointer; font-size: 14px; color: var(--text); display: flex; align-items: center; justify-content: center; gap: 8px;">
+            <input type="checkbox" id="shuffleMode" style="width: 18px; height: 18px; cursor: pointer;"> 
+            問題をランダムに出題する
+        </label>
+    </div>
+    <button class="start-btn" onclick="startWithPaste()">START LEARNING</button>
 </div>
 
 <div id="quizArea" class="hidden">
     <div id="question"></div>
-    <input type="text" id="answer" autocomplete="off" placeholder="答えを入力してEnter">
+    <input type="text" id="answer" autocomplete="off" placeholder="Answer...">
     <div id="score">
-        <span>残り: <span id="remainingCount">0</span></span>
-        <span>正解: <span id="correctCount">0</span> | 不正解: <span id="mistakeCount">0</span></span>
+        <span>残り: <b id="remainingCount">0</b></span>
+        <span>正解: <b id="correctCount">0</b> / 不正解: <b id="mistakeCount">0</b></span>
     </div>
     <div id="report" class="hidden"></div>
 </div>
 
 <script>
-// --- グローバル変数 ---
 let questions = [];
-let consecutiveCorrect = 0;       
-let totalMistakes = 0;            
-let answeredOnceWrong = new Set(); 
-let mainQueue = [];       
-let currentIndex = null;
-let currentIsRevenge = false; // データセットを使わず変数で管理
-let isCorrectionMode = false; 
-let isFinished = false;
+let mainQueue = [];
+let consecutiveCorrect = 0, totalMistakes = 0;
+let answeredOnceWrong = new Set();
+let currentIndex = null, currentIsRevenge = false, isCorrectionMode = false;
 
-// --- DOM要素のキャッシュ ---
-const fileInput = document.getElementById("fileInput");
-const quizArea = document.getElementById("quizArea");
-const questionEl = document.getElementById("question");
-const answerEl = document.getElementById("answer");
-const correctCountEl = document.getElementById("correctCount");
-const mistakeCountEl = document.getElementById("mistakeCount");
-const remainingCountEl = document.getElementById("remainingCount");
-const reportEl = document.getElementById("report");
+const el = {
+    setup: document.getElementById("setupArea"),
+    quiz: document.getElementById("quizArea"),
+    q: document.getElementById("question"),
+    a: document.getElementById("answer"),
+    correct: document.getElementById("correctCount"),
+    mistake: document.getElementById("mistakeCount"),
+    remain: document.getElementById("remainingCount"),
+    drop: document.getElementById("dropZone"),
+    file: document.getElementById("fileInput"),
+    paste: document.getElementById("pasteArea"),
+    report: document.getElementById("report"),
+    shuffle: document.getElementById("shuffleMode")
+};
 
-// --- 初期設定：イベントリスナーは1回だけ登録 ---
-fileInput.addEventListener("change", (e) => {
-    const file = e.target.files[0];
+el.drop.onclick = () => el.file.click();
+el.drop.ondragover = (e) => { e.preventDefault(); el.drop.classList.add("dragover"); };
+el.drop.ondragleave = () => el.drop.classList.remove("dragover");
+el.drop.ondrop = (e) => { e.preventDefault(); el.drop.classList.remove("dragover"); handleFile(e.dataTransfer.files[0]); };
+el.file.onchange = (e) => handleFile(e.target.files[0]);
+
+function handleFile(file) {
     if(!file) return;
     const reader = new FileReader();
-    reader.onload = (event) => {
-        parseFile(event.target.result);
-        if(questions.length === 0) return;
-        fileInput.classList.add("hidden");
-        quizArea.classList.remove("hidden");
-        mainQueue = questions.map((_, i) => ({ index: i, isRevenge: false }));
-        showNext();
-    };
+    reader.onload = (e) => initQuiz(e.target.result);
     reader.readAsText(file);
-});
+}
 
-// キーイベントを1ヶ所で管理（重複登録を防ぐ）
-answerEl.addEventListener("keydown", (e) => {
-    if(e.key === "Enter" && !answerEl.disabled && !isFinished) {
-        checkAnswer();
-    }
-});
+function startWithPaste() {
+    if(el.paste.value.trim()) initQuiz(el.paste.value);
+}
 
-function parseFile(text){
-    // ファイル解析を高速化
-    questions = [];
-    const lines = text.split(/\r?\n/);
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (line === "") continue;
-        const parts = line.split(",");
-        if (parts.length >= 2) {
-            questions.push({ q: parts[0].trim(), a: parts[1].trim() });
+function initQuiz(text) {
+    questions = text.split(/\r?\n/).filter(l => l.includes(",")).map(l => { 
+        const p = l.split(","); return { a: p[0].trim(), q: p[1].trim() }; 
+    });
+    if(questions.length === 0) return alert("データがありません。");
+    el.setup.classList.add("hidden");
+    el.quiz.classList.remove("hidden");
+    mainQueue = questions.map((_, i) => ({ index: i, isRevenge: false }));
+
+    if (el.shuffle && el.shuffle.checked) {
+        for (let i = mainQueue.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [mainQueue[i], mainQueue[j]] = [mainQueue[j], mainQueue[i]];
         }
     }
+    showNext();
 }
 
-function updateScore() {
-    correctCountEl.textContent = consecutiveCorrect;
-    mistakeCountEl.textContent = totalMistakes;
-    remainingCountEl.textContent = mainQueue.length;
-}
-
-function showNext(){
-    if(mainQueue.length === 0){
-        finishQuiz();
-        return;
-    }
-
-    const nextItem = mainQueue.shift();
-    currentIndex = nextItem.index;
-    currentIsRevenge = nextItem.isRevenge;
-
-    isCorrectionMode = false;
-    questionEl.textContent = questions[currentIndex].q;
-    answerEl.value = "";
-    answerEl.disabled = false;
-    answerEl.className = "";
-    answerEl.focus();
-    updateScore();
-}
-
-function checkAnswer(){
-    const userAnswer = answerEl.value.trim();
-    const correctAnswer = questions[currentIndex].a;
-
-    if(userAnswer === correctAnswer){
-        if (isCorrectionMode) {
-            // 打ち直し正解 → 再出題を挿入
-            injectRevenge(currentIndex);
-            showNext();
+/**
+ * キー入力制御
+ */
+el.a.onkeydown = (e) => {
+    if (el.a.classList.contains("showing-answer")) {
+        if (e.key === "Enter" || e.key === "Backspace") {
+            e.preventDefault();
+            el.a.value = "";
+            el.a.readOnly = false;
+            el.a.classList.remove("showing-answer");
+            return;
         } else {
-            // 1発正解
-            if (currentIsRevenge) {
-                totalMistakes = Math.max(0, totalMistakes - 1);
-                consecutiveCorrect++;
-            } else if (!answeredOnceWrong.has(currentIndex)) {
-                consecutiveCorrect++;
+            e.preventDefault();
+            return;
+        }
+    }
+    if (e.key === "Enter") checkAnswer();
+};
+
+el.a.oninput = (e) => {
+    if (el.a.classList.contains("showing-answer")) {
+        el.a.value = questions[currentIndex].a;
+    }
+};
+
+function normalize(str, allowIgnoreBrackets = false) {
+    if (!str) return "";
+    let res = str.replace(/[！-～]/g, (s) => String.fromCharCode(s.charCodeAt(0) - 0xFEE0));
+    if (allowIgnoreBrackets) {
+        res = res.replace(/\(.*?\)|（.*?）/g, '');
+    }
+    return res.replace(/[^a-zA-Z0-9ぁ-んァ-ヶ亜-熙]/g, '').toLowerCase();
+}
+
+function checkAnswer() {
+    const user = el.a.value.trim();
+    const correctRaw = questions[currentIndex].a;
+    const isCorrect = (user !== "" && normalize(user) === normalize(correctRaw)) || 
+                      (user !== "" && normalize(user) === normalize(correctRaw, true));
+
+    if (isCorrect) {
+        if (isCorrectionMode) {
+            // 打ち直し成功時
+            const retryIdx = currentIndex; 
+            showNext();              // 先に次の問題(B)を表示。配列の先頭は(C)になる
+            injectRevenge(retryIdx); // 残った配列の2番目以降に(A)を予約
+        } else {
+            // 初回正解、または再出題(Revenge)の正解時
+            if (currentIsRevenge) { 
+                totalMistakes = Math.max(0, totalMistakes - 1); 
+                consecutiveCorrect++; 
+            } else if (!answeredOnceWrong.has(currentIndex)) { 
+                consecutiveCorrect++; 
             }
             showNext();
         }
     } else {
-        processWrong(correctAnswer);
+        // 不正解時の処理（変更なし）
+        if (!answeredOnceWrong.has(currentIndex)) { 
+            totalMistakes++; 
+            answeredOnceWrong.add(currentIndex); 
+        }
+        updateScore();
+        isCorrectionMode = true;
+        el.a.readOnly = true; 
+        el.a.value = correctRaw; 
+        el.a.classList.add("showing-answer");
     }
-}
-
-function processWrong(correctAnswer) {
-    if (!answeredOnceWrong.has(currentIndex)) {
-        totalMistakes++;
-        answeredOnceWrong.add(currentIndex);
-    }
-    updateScore();
-
-    isCorrectionMode = true;
-    answerEl.value = correctAnswer;
-    answerEl.disabled = true; 
-    answerEl.classList.add("showing-answer");
-
-    // 視覚的フィードバック時間は文字数ベース（0.8s〜2.5sに制限してテンポアップ）
-    const displayTime = Math.min(2.5, Math.max(0.8, correctAnswer.length * 0.15));
-
-    setTimeout(() => {
-        answerEl.disabled = false;
-        answerEl.value = "";
-        answerEl.classList.remove("showing-answer");
-        answerEl.focus();
-    }, displayTime * 1000);
 }
 
 function injectRevenge(idx) {
-    const len = mainQueue.length;
-    if (len === 0) {
-        mainQueue.push({ index: idx, isRevenge: true });
-        return;
-    }
+    if(mainQueue.some(item => item.index === idx && item.isRevenge)) return;
+
+    // 1. 最後に予約されたRの位置を探す（なければ現在の画面の次=1とする）
+    const lastRIndex = mainQueue.findLastIndex(item => item.isRevenge);
     
-    // 2〜6問後のランダム位置
-    const offset = Math.floor(Math.random() * 5) + 2; 
-    let targetPos = Math.min(offset - 1, len);
+    // 2. 確率の抽選
+    const isChain = Math.random() < 0.33; // 33%で隣接
+    const N = (Math.random() < 0.75 ? 2 : 3); // 75%で2つあき、25%で3つあき
 
-    // 連続防止（残弾がある場合のみ）
-    if (targetPos === 0 && len > 0) targetPos = 1;
+    // 3. 挿入位置を決定
+    let bestPos;
+    if (isChain && lastRIndex !== -1) {
+        bestPos = lastRIndex + 1; // 隣接
+    } else {
+        // 前のRから「N+1」離れた位置、または今の次の次の次(2)以降の遠い方を採用
+        const basePos = (lastRIndex !== -1) ? lastRIndex + N + 1 : N;
+        bestPos = Math.max(2, basePos);
+    }
 
-    mainQueue.splice(targetPos, 0, { index: idx, isRevenge: true });
+    // 4. 挿入（配列の長さを超えてもspliceは末尾に追加してくれるので安心）
+    mainQueue.splice(bestPos, 0, { index: idx, isRevenge: true });
 }
 
-function finishQuiz(){
-    isFinished = true;
-    questionEl.textContent = "学習完了！";
-    answerEl.classList.add("hidden");
-    updateScore();
+function showNext() {
+    if (mainQueue.length === 0) return finishQuiz();
+    const next = mainQueue.shift();
+    currentIndex = next.index;
+    currentIsRevenge = next.isRevenge;
+    isCorrectionMode = false;
+
+    el.q.textContent = questions[currentIndex].q;
+    el.a.readOnly = false;
+    el.a.value = ""; 
+    el.a.classList.remove("showing-answer");
     
-    const wrongList = [...answeredOnceWrong].map(i => questions[i].q).join(", ");
-    reportEl.innerHTML = `
-        <strong>最終レポート</strong><br>
-        一発正解数: ${consecutiveCorrect}<br>
-        未習得数: ${totalMistakes}<br>
-        <small style="color:#7f8c8d;">一度でも間違えた問題: ${wrongList || 'なし'}</small>
-    `;
-    reportEl.classList.remove("hidden");
+    // フォーカスとズレ対策
+    setTimeout(() => {
+        el.a.focus();
+    }, 10);
+    updateScore();
+}
+
+function updateScore() {
+    el.correct.textContent = consecutiveCorrect;
+    el.mistake.textContent = totalMistakes;
+    el.remain.textContent = mainQueue.length;
+}
+
+function finishQuiz() {
+    el.q.textContent = "All Clear!";
+    el.a.classList.add("hidden");
+    el.report.innerHTML = `正解数: ${consecutiveCorrect} <br> 未習得数: ${totalMistakes}`;
+    el.report.classList.remove("hidden");
 }
 </script>
-
 </body>
 </html>
